@@ -1,0 +1,392 @@
+{
+  "paragraphs": [
+    {
+      "text": "%sh\nhdfs dfs -get s3://49ers.qubole.com/sparkstreaming/jars/kafka/kafka-avro-serializer-1.0.jar /tmp\nhdfs dfs -get s3://49ers.qubole.com/sparkstreaming/jars/kafka/kafka-schema-registry-client-1.0.jar /tmp\n",
+      "dateUpdated": "Jul 19, 2016 4:30:29 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464238732659_650994378",
+      "id": "20160526-045852_274162779",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": ""
+      },
+      "dateCreated": "May 26, 2016 4:58:52 AM",
+      "dateStarted": "Jul 19, 2016 4:30:29 AM",
+      "dateFinished": "Jul 19, 2016 4:30:33 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%dep\nz.reset()\nz.load(\"/tmp/kafka-schema-registry-client-1.0.jar\")\nz.load(\"/tmp/kafka-avro-serializer-1.0.jar\")",
+      "dateUpdated": "Jul 19, 2016 4:32:13 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464238744809_192220447",
+      "id": "20160526-045904_948186126",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": "DepInterpreter(%dep) deprecated. Remove dependencies and repositories through GUI interpreter menu instead.\nDepInterpreter(%dep) deprecated. Load dependency through GUI interpreter menu instead.\nDepInterpreter(%dep) deprecated. Load dependency through GUI interpreter menu instead.\nres0: org.apache.zeppelin.dep.Dependency \u003d org.apache.zeppelin.dep.Dependency@25389b55\n"
+      },
+      "dateCreated": "May 26, 2016 4:59:04 AM",
+      "dateStarted": "Jul 19, 2016 4:32:13 AM",
+      "dateFinished": "Jul 19, 2016 4:32:26 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "import sys.process._\nimport scala.sys.process._\nimport java.util.HashMap\nimport java.util.Date\nimport io.confluent.kafka.serializers.KafkaAvroDecoder\nimport org.apache.avro.generic.GenericRecord\nimport org.apache.kafka.clients.producer.{ProducerConfig, KafkaProducer, ProducerRecord}\n\nimport org.apache.spark.streaming._\nimport org.apache.spark.sql._\nimport org.apache.spark.rdd.RDD\nimport org.apache.spark.sql.{SQLContext, SaveMode}\nimport org.apache.spark.streaming._\nimport org.apache.spark.streaming.kafka.KafkaUtils\nimport org.apache.spark.streaming.{StreamingContext, Seconds, Minutes}\nimport org.apache.spark.SparkConf\nimport org.apache.commons.lang3.StringUtils\nimport org.apache.spark.streaming.dstream.DStream\nimport java.text.SimpleDateFormat\nimport java.util.Date\n\nobject DirectKafkaTwitterStream extends Serializable {\n\n    val zkhost \u003d \"ec2-50-17-73-68.compute-1.amazonaws.com\"\n    val kafkahost \u003d zkhost\n    val brokers \u003d \"ec2-50-17-73-68.compute-1.amazonaws.com:9092\"\n    val schemaRegistryUrl \u003d \"http://ec2-50-17-73-68.compute-1.amazonaws.com:8081\"\n    val checkpointDir \u003d \"/checkpoints\"\n    val topics \u003d \"twitter1\"\n    val topicToSend \u003d topics.split(\",\")(0)\n    var messageId : Long \u003d 1\n    val recent_tweets \u003d \"recent_tweets\"\n    val all_tweets \u003d \"all_candidate3\"\n    val numStreams \u003d 5\n    val writeEveryNSeconds \u003d 60\n    val outputDirectory \u003d \"s3://49ers.qubole.com/sparkstreaming/warehouse/batch_tweets\"\n    \n    // # of files that needs to be written out for every batch (writeEveryNSeconds).\n    val numberOfFilesPerBatch \u003d 2\n   \n    @transient var ssc : StreamingContext \u003d null\n\n    def process() {\n        \n        // Initial state RDD for mapWithState operation\n        val initialRDD \u003d ssc.sparkContext.parallelize(List((\"trump\", 0), (\"hillary\", 0), (\"cruz\", 0), (\"sanders\", 0), (\"others\", 0)))\n    \n        val topicsSet \u003d topics.split(\",\").toSet\n        val kafkaParams \u003d Map[String, String](\"metadata.broker.list\" -\u003e brokers, \"schema.registry.url\" -\u003e schemaRegistryUrl)\n       \n        val kafkaStream \u003d KafkaUtils.createDirectStream[Object, Object, KafkaAvroDecoder, KafkaAvroDecoder](\n          ssc, kafkaParams, topicsSet).map(_._2.toString)\n        val tweetStream \u003d kafkaStream.map(x \u003d\u003e (if(StringUtils.containsIgnoreCase(x,\"trump\")) \"trump\"\n                                else if(StringUtils.containsIgnoreCase(x,\"cruz\")) \"cruz\"\n                                else if(StringUtils.containsIgnoreCase(x,\"hillary\")) \"hillary\"\n                                else if(StringUtils.containsIgnoreCase(x,\"sanders\")) \"sanders\"\n                                else \"others\", \n                                1))\n\n        val sdf \u003d new SimpleDateFormat(\"yyyyMMddhh\")\n        tweetStream.checkpoint(Seconds(70))\n        tweetStream.foreachRDD(m \u003d\u003e {\n          println(\"size is \" + m.collect.size)\n        })\n        // Write to S3 in Parquet format for every N seconds.\n        tweetStream.window(Seconds(writeEveryNSeconds), Seconds(writeEveryNSeconds)).foreachRDD { (rdd, time) \u003d\u003e \n            val sqlContext \u003d SQLContext.getOrCreate(sc)\n            import sqlContext.implicits._\n            val df \u003d rdd.map(x \u003d\u003e(x._1, x._2)).toDF(\"candidate\", \"vote\")\n            val datehour \u003d sdf.format(new Date(time.milliseconds))    // UTC time as shown in Spark Streaming UI.\n            val finalDf \u003d df.withColumn(\"datehr\", lit(datehour))\n            finalDf.write.mode(SaveMode.Append).partitionBy(\"datehr\").saveAsTable(all_tweets)\n            // finalDf.write.mode(SaveMode.Append).partitionBy(\"datehr\").save(outputDirectory)\n        }\n    }\n    \n    def setupContext() : StreamingContext \u003d {\n        // Create context with 2 second batch interval\n        sc.getConf.registerKryoClasses(Array(classOf[org.apache.avro.mapred.AvroWrapper[GenericRecord]]))\n        ssc \u003d new StreamingContext(sc, Seconds(10))\n        ssc.remember(Minutes(10))\n        ssc.checkpoint(\"/checkpoints\")\n        process()\n        ssc\n    }\n    \n    def stop() \u003d {\n        if (ssc !\u003d null) {\n            ssc.stop(false, true)\n            ssc \u003d null\n        }\n    }\n  \n   def start() \u003d {\n        if (ssc !\u003d null) {\n            stop()\n        }\n        \n        ssc \u003d StreamingContext.getOrCreate(checkpointDir, setupContext _)\n        ssc.start()\n    }\n}",
+      "dateUpdated": "Jul 19, 2016 4:34:03 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464239262393_-367841491",
+      "id": "20160526-050742_1953083191",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": "import sys.process._\nimport scala.sys.process._\nimport java.util.HashMap\nimport java.util.Date\nimport io.confluent.kafka.serializers.KafkaAvroDecoder\nimport org.apache.avro.generic.GenericRecord\nimport org.apache.kafka.clients.producer.{ProducerConfig, KafkaProducer, ProducerRecord}\nimport org.apache.spark.streaming._\nimport org.apache.spark.sql._\nimport org.apache.spark.rdd.RDD\nimport org.apache.spark.sql.{SQLContext, SaveMode}\nimport org.apache.spark.streaming._\nimport org.apache.spark.streaming.kafka.KafkaUtils\nimport org.apache.spark.streaming.{StreamingContext, Seconds, Minutes}\nimport org.apache.spark.SparkConf\nimport org.apache.commons.lang3.StringUtils\nimport org.apache.spark.streaming.dstream.DStream\nimport java.text.SimpleDateFormat\nimport java.util.Date\ndefined module DirectKafkaTwitterStream\n"
+      },
+      "dateCreated": "May 26, 2016 5:07:42 AM",
+      "dateStarted": "Jul 19, 2016 4:34:03 AM",
+      "dateFinished": "Jul 19, 2016 4:34:58 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sh\nhadoop dfs -ls /checkpoints",
+      "dateUpdated": "Jun 13, 2016 4:06:36 PM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/sh"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1465537180852_701994244",
+      "id": "20160610-053940_1601800599",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": "Found 12 items\ndrwxr-xr-x   - root hdfs          0 2016-06-13 16:05 /checkpoints/0dd7e379-98ed-443d-a763-231186c1c72e\n-rw-r--r--   2 root hdfs      32984 2016-06-13 16:04 /checkpoints/checkpoint-1465833890000\n-rw-r--r--   2 root hdfs      32984 2016-06-13 16:05 /checkpoints/checkpoint-1465833900000\n-rw-r--r--   2 root hdfs      33442 2016-06-13 16:05 /checkpoints/checkpoint-1465833910000\n-rw-r--r--   2 root hdfs      33602 2016-06-13 16:05 /checkpoints/checkpoint-1465833920000\n-rw-r--r--   2 root hdfs      33602 2016-06-13 16:05 /checkpoints/checkpoint-1465833930000\n-rw-r--r--   2 root hdfs      33602 2016-06-13 16:05 /checkpoints/checkpoint-1465833940000\n-rw-r--r--   2 root hdfs      33602 2016-06-13 16:05 /checkpoints/checkpoint-1465833950000\n-rw-r--r--   2 root hdfs      33615 2016-06-13 16:06 /checkpoints/checkpoint-1465833960000\n-rw-r--r--   2 root hdfs      34512 2016-06-13 16:06 /checkpoints/checkpoint-1465833970000\n-rw-r--r--   2 root hdfs      34516 2016-06-13 16:06 /checkpoints/checkpoint-1465833980000\ndrwxr-xr-x   - root hdfs          0 2016-06-13 16:05 /checkpoints/receivedBlockMetadata\n"
+      },
+      "dateCreated": "Jun 10, 2016 5:39:40 AM",
+      "dateStarted": "Jun 13, 2016 4:06:36 PM",
+      "dateFinished": "Jun 13, 2016 4:06:38 PM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "DirectKafkaTwitterStream.start()",
+      "dateUpdated": "Jul 19, 2016 4:46:00 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464239277066_891472307",
+      "id": "20160526-050757_425268964",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": ""
+      },
+      "dateCreated": "May 26, 2016 5:07:57 AM",
+      "dateStarted": "Jul 19, 2016 4:46:00 AM",
+      "dateFinished": "Jul 19, 2016 4:46:02 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "import java.util.{Calendar, GregorianCalendar}\nimport java.util.Date\nimport org.apache.commons.lang3.StringUtils\nimport java.text.SimpleDateFormat\n\ndef convertDate(dateString: String) : String \u003d {\n    val df \u003d new SimpleDateFormat(\"yyyyMMddhh\") \n    val date \u003d df.parse(dateString)\n    val newDateString \u003d df.format(date)\n    return newDateString\n}\nval sqlContext \u003d SQLContext.getOrCreate(sc)\n\nsqlContext.udf.register(\"convertDate\", convertDate(_:String))",
+      "dateUpdated": "Jun 13, 2016 4:24:40 PM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464866023533_-119878610",
+      "id": "20160602-111343_1801435522",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": "import java.util.{Calendar, GregorianCalendar}\nimport java.util.Date\nimport org.apache.commons.lang3.StringUtils\nimport java.text.SimpleDateFormat\nconvertDate: (dateString: String)String\nsqlContext: org.apache.spark.sql.SQLContext \u003d org.apache.spark.sql.hive.HiveContext@7ed11886\nres3: org.apache.spark.sql.UserDefinedFunction \u003d UserDefinedFunction(\u003cfunction1\u003e,StringType,List())\n"
+      },
+      "dateCreated": "Jun 2, 2016 11:13:43 AM",
+      "dateStarted": "Jun 13, 2016 4:24:40 PM",
+      "dateFinished": "Jun 13, 2016 4:24:43 PM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sql\nSELECT candidate, count(*) from all_candidate3 group by candidate\n",
+      "dateUpdated": "Jul 19, 2016 6:05:25 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 358.0,
+          "optionOpen": false,
+          "keys": [
+            {
+              "name": "candidate",
+              "index": 0.0,
+              "aggr": "sum"
+            }
+          ],
+          "values": [
+            {
+              "name": "_c1",
+              "index": 1.0,
+              "aggr": "sum"
+            }
+          ],
+          "groups": [],
+          "scatter": {
+            "xAxis": {
+              "name": "candidate",
+              "index": 0.0,
+              "aggr": "sum"
+            }
+          }
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464239627875_-1614890942",
+      "id": "20160526-051347_782788619",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TABLE",
+        "msg": "candidate\t_c1\ntrump\t104519\ncruz\t89\nothers\t22448\nhillary\t25361\nsanders\t3833\n"
+      },
+      "dateCreated": "May 26, 2016 5:13:47 AM",
+      "dateStarted": "Jul 19, 2016 6:05:26 AM",
+      "dateFinished": "Jul 19, 2016 6:10:46 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "DirectKafkaTwitterStream.stop()",
+      "dateUpdated": "Jul 18, 2016 9:03:41 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala",
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464240208594_-1985422222",
+      "id": "20160526-052328_861665547",
+      "result": {
+        "code": "ERROR",
+        "type": "TEXT",
+        "msg": "Interpreter JVM has stopped responding. This generally happens if spark driver has run out of memory.\nTry rerunning paragraph after increasing value of spark.driver.memory in interpreter settings page.\nDrop us a mail at help@qubole.com with notebook link for root cause analysis."
+      },
+      "dateCreated": "May 26, 2016 5:23:28 AM",
+      "dateStarted": "Jul 18, 2016 9:03:41 AM",
+      "dateFinished": "Jun 11, 2016 6:43:24 AM",
+      "status": "ABORT",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "import sqlContext.implicits._\nval parquetFile \u003d sqlContext.read.parquet(\"s3://49ers.qubole.com/sparkstreaming/warehouse/batch_tweets\")\nparquetFile.registerTempTable(\"parquetFile\")\nval tweets \u003d sqlContext.sql(\"SELECT candidate, datehr, count(*) from all_candidate1 group by candidate, datehr\")\ntweets.collect().foreach(println)",
+      "dateUpdated": "Jun 13, 2016 5:32:41 PM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [],
+          "values": [],
+          "groups": [],
+          "scatter": {}
+        },
+        "editorMode": "ace/mode/scala"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464771076664_1368904886",
+      "id": "20160601-085116_1211161939",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TEXT",
+        "msg": "import sqlContext.implicits._\nparquetFile: org.apache.spark.sql.DataFrame \u003d [candidate: string, timestamp: int, datehr: string]\ntweets: org.apache.spark.sql.DataFrame \u003d [candidate: string, datehr: string, _c2: bigint]\n[others,2016061303,194]\n[others,2016061304,3203]\n[others,2016061305,41]\n[hillary,2016061001,727]\n[hillary,2016061002,12484]\n[hillary,2016061004,2332]\n[trump,2016061303,848]\n[hillary,2016061006,6305]\n[trump,2016061304,15132]\n[hillary,2016061007,9208]\n[trump,2016061305,130]\n[cruz,2016061106,10]\n[sanders,2016061303,38]\n[sanders,2016061304,646]\n[sanders,2016061305,2]\n[cruz,2016061001,3]\n[cruz,2016061002,69]\n[cruz,2016061004,5]\n[cruz,2016061006,6]\n[cruz,2016061007,5]\n[others,2016061106,1055]\n[hillary,2016061303,290]\n[trump,2016061106,5290]\n[others,2016061001,280]\n[hillary,2016061304,4581]\n[others,2016061002,5054]\n[hillary,2016061305,117]\n[others,2016061004,903]\n[others,2016061006,1580]\n[others,2016061007,1996]\n[sanders,2016061106,340]\n[trump,2016061001,1305]\n[trump,2016061002,22174]\n[trump,2016061004,4654]\n[trump,2016061006,7908]\n[trump,2016061007,12178]\n[sanders,2016061001,100]\n[sanders,2016061002,1604]\n[cruz,2016061304,15]\n[sanders,2016061004,374]\n[sanders,2016061006,782]\n[sanders,2016061007,1120]\n[hillary,2016061106,2600]\n"
+      },
+      "dateCreated": "Jun 1, 2016 8:51:16 AM",
+      "dateStarted": "Jun 13, 2016 5:32:41 PM",
+      "dateFinished": "Jun 13, 2016 5:34:35 PM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sql\ndrop table  all_candidate3",
+      "dateUpdated": "Jun 14, 2016 3:27:19 AM",
+      "config": {
+        "colWidth": 12.0,
+        "graph": {
+          "mode": "table",
+          "height": 300.0,
+          "optionOpen": false,
+          "keys": [
+            {
+              "name": "_c0",
+              "index": 0.0,
+              "aggr": "sum"
+            }
+          ],
+          "values": [],
+          "groups": [],
+          "scatter": {
+            "xAxis": {
+              "name": "_c0",
+              "index": 0.0,
+              "aggr": "sum"
+            }
+          }
+        },
+        "editorMode": "ace/mode/sql"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1464844961997_-752946566",
+      "id": "20160602-052241_1374722991",
+      "result": {
+        "code": "SUCCESS",
+        "type": "TABLE",
+        "msg": "\n"
+      },
+      "dateCreated": "Jun 2, 2016 5:22:41 AM",
+      "dateStarted": "Jun 14, 2016 3:27:19 AM",
+      "dateFinished": "Jun 14, 2016 3:30:19 AM",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "config": {},
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "jobName": "paragraph_1465546295330_1688602847",
+      "id": "20160610-081135_689604573",
+      "dateCreated": "Jun 10, 2016 8:11:35 AM",
+      "status": "READY",
+      "progressUpdateIntervalMs": 500
+    }
+  ],
+  "name": "Kafka-Direct-SPAR-990",
+  "id": "2BNVE736N180321464238732649",
+  "angularObjects": {
+    "2BK8NXT9Y180321464165647847": [],
+    "2BNYKUXGV180321464165647850": [],
+    "2BNGCF835180321464165647718": []
+  },
+  "config": {},
+  "info": {},
+  "source": "FCN"
+}
